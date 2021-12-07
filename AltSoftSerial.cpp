@@ -21,92 +21,130 @@
  * THE SOFTWARE.
  */
 
-// Revisions are now tracked on GitHub
+// Original code is found on github:
 // https://github.com/PaulStoffregen/AltSoftSerial
-//
-// Version 1.2: Support Teensy 3.x
-//
-// Version 1.1: Improve performance in receiver code
-//
-// Version 1.0: Initial Release
+// This alternative version is: de-Arduino-ed, hardware mapping is moved to HW secific folder and different serial formats are implemented.
 
 
 #include "AltSoftSerial.h"
-#include "config/AltSoftSerial_Boards.h"
-#include "config/AltSoftSerial_Timers.h"
+
+
 
 /****************************************/
 /**          Initialization            **/
 /****************************************/
 
-static uint16_t ticks_per_bit=0;
-bool AltSoftSerial::timing_error=false;
+/** Counter ticks per bit time */
+static counter_type ticks_per_bit=0;
 
+/** Is parity enabled? */
+static uint8_t ass_parity;
+/** Number of data bits in a single data */
+static uint8_t ass_nBit;
+/** Number of signals in a single data: start+data+parity+stop */
+static uint8_t ass_nSignal;
+/** Mask to OR with tx_byte in case the parity is even. Stores parity and stop bits. */
+static uint16_t ass_mask_even;
+/** Mask to OR with tx_byte in case the parity is odd.  Stores parity and stop bits. */
+static uint16_t ass_mask_odd;
+/** Mask to remove parity and stop bits from the high positions. */
+static data_type ass_receive_mask;
+
+/** Index of bit currently being received. 0:idle wait for start edge
+ * 1 receiving start bit (just after start edge)
+ * 1+n receiving data, parity or stop bit
+ */
 static uint8_t rx_state;
-static uint8_t rx_byte;
+/** The data currently being received. */
+static uint16_t rx_byte;
+/** Bit mask to store current received bit. */
+static uint16_t rx_mask;
+/** The current received bit value. Using the capture interrupt this is maintained to reflect the current state of the line. 
+ * 1 is active similar to start bit (typically low but depends on invert settings)
+ * 0 is inactive similar to start but (typically high but depends on invert settings)
+ */
 static uint8_t rx_bit = 0;
+/** The timestamp at which the next bit have to be sampled. The middle of the signal. */
 static uint16_t rx_target;
+/** Number of ticks after the receive of data process is finished. Counted from the first edge of the start bit. Value is: start+datas+parity+stops-half. So the time is in the middle of last stop bit.
+ * At this time receive of a bit is finished independent of the detected edges. */
 static uint16_t rx_stop_ticks=0;
+/** Receive ringbuffer head offset */
 static volatile uint8_t rx_buffer_head;
+/** Receive ringbuffer tail offset */
 static volatile uint8_t rx_buffer_tail;
-#define RX_BUFFER_SIZE 80
-static volatile uint8_t rx_buffer[RX_BUFFER_SIZE];
+/** Receive ringbuffer data */
+static volatile data_type rx_buffer[RX_BUFFER_SIZE];
 
+/** Number of remaining signals to be sent plus 1 to wait. Indexed from ass_nSignal+1.
+ * 0 means transmit is finished/not started.
+ * 1 means last stop bit is being transmitted.
+ * ass_nSignal+1 means that the start bit will be sent when the next output compare match happens (and we are either in idle state or during the last stop bit)
+ * 1<n<ass_nSignal+1 means that we are currently transmitting the signal indexed by n (counting towards 0)
+ */
 static volatile uint8_t tx_state=0;
-static uint8_t tx_byte;
-static uint8_t tx_bit;
+/** The current data being sent. LSB is the next signal to send. Start bit, n data bit, parity and stop bits are stored in this sample. */
+static uint16_t tx_byte;
+/** The head offset of the transmit ring buffer. */
 static volatile uint8_t tx_buffer_head;
+/** The tail offset of the transmit ring buffer. */
 static volatile uint8_t tx_buffer_tail;
-#define TX_BUFFER_SIZE 68
-static volatile uint8_t tx_buffer[TX_BUFFER_SIZE];
+/** The transmit ring buffer. */
+static volatile data_type tx_buffer[TX_BUFFER_SIZE];
 
-
-#ifndef INPUT_PULLUP
-#define INPUT_PULLUP INPUT
-#endif
-
-#define MAX_COUNTS_PER_BIT  6241  // 65536 / 10.5
-
-void AltSoftSerial::init(uint32_t cycles_per_bit)
+void AltSoftSerial::begin(uint32_t baud)
 {
-	//Serial.printf("cycles_per_bit = %d\n", cycles_per_bit);
-	if (cycles_per_bit < MAX_COUNTS_PER_BIT) {
-		CONFIG_TIMER_NOPRESCALE();
-	} else {
-		cycles_per_bit /= 8;
-		//Serial.printf("cycles_per_bit/8 = %d\n", cycles_per_bit);
-		if (cycles_per_bit < MAX_COUNTS_PER_BIT) {
-			CONFIG_TIMER_PRESCALE_8();
-		} else {
-#if defined(CONFIG_TIMER_PRESCALE_256)
-			cycles_per_bit /= 32;
-			//Serial.printf("cycles_per_bit/256 = %d\n", cycles_per_bit);
-			if (cycles_per_bit < MAX_COUNTS_PER_BIT) {
-				CONFIG_TIMER_PRESCALE_256();
-			} else {
-				return; // baud rate too low for AltSoftSerial
-			}
-#elif defined(CONFIG_TIMER_PRESCALE_128)
-			cycles_per_bit /= 16;
-			//Serial.printf("cycles_per_bit/128 = %d\n", cycles_per_bit);
-			if (cycles_per_bit < MAX_COUNTS_PER_BIT) {
-				CONFIG_TIMER_PRESCALE_128();
-			} else {
-				return; // baud rate too low for AltSoftSerial
-			}
-#else
-			return; // baud rate too low for AltSoftSerial
-#endif
-		}
+	 init((ALTSS_BASE_FREQ + baud / 2) / baud, 8, 0, 1);
+}
+void AltSoftSerial::begin(uint32_t baud, uint8_t nBit,  uint8_t parity, uint8_t nStopBit)
+{
+	 init((ALTSS_BASE_FREQ + baud / 2) / baud, nBit, parity, nStopBit);
+}
+
+
+void AltSoftSerial::init(uint32_t cycles_per_bit, uint8_t nBit,  uint8_t parity, uint8_t nStopBit)
+{
+	ass_parity=parity;
+	ass_nBit=nBit;
+	ass_nSignal=1+nBit+(parity==0?0:1)+nStopBit;
+	// Timer is set up when start edge is detected and must not overflow until the middle of the last stop bit.
+	counter_type MAX_COUNTS_PER_BIT=((uint32_t)COUNTER_MAX_VALUE)*2/(2*ass_nSignal-1);
+	ticks_per_bit = AltSoftSerial_configureTimer(cycles_per_bit, MAX_COUNTS_PER_BIT);
+	rx_stop_ticks = ticks_per_bit * (ass_nSignal-1) + ticks_per_bit/2;
+	/** Mask to OR with tx_byte in case the parity is even. Stores parity and stop bits. */
+	uint16_t mask=0;
+	uint16_t maskParity=0;
+	ass_receive_mask=0;
+	for(uint8_t i=0;i<nStopBit;++i)
+	{
+		mask<<=1;
+		mask|=1;
 	}
-	ticks_per_bit = cycles_per_bit;
-	rx_stop_ticks = cycles_per_bit * 37 / 4;
-	pinMode(INPUT_CAPTURE_PIN, INPUT_PULLUP);
-	digitalWrite(OUTPUT_COMPARE_A_PIN, HIGH);
-	pinMode(OUTPUT_COMPARE_A_PIN, OUTPUT);
+	if(parity!=0)
+	{
+		mask<<=1;
+		maskParity=1;
+	}
+	for(uint8_t i=0;i<nBit;++i)
+	{
+		mask<<=1;
+		maskParity<<=1;
+		ass_receive_mask<<=1;
+		ass_receive_mask|=1;
+	}
+	mask<<=1;
+	maskParity<<=1;
+	ass_mask_even=(parity==1)?(mask|maskParity):mask;	// TODO check parity
+	ass_mask_odd=(parity==2)?(mask|maskParity):mask;
+
+	SETUP_PINS();
 	rx_state = 0;
+	rx_bit = 0;
 	rx_buffer_head = 0;
 	rx_buffer_tail = 0;
+	rx_byte=0;
+	rx_mask=1;
+
 	tx_state = 0;
 	tx_buffer_head = 0;
 	tx_buffer_tail = 0;
@@ -120,7 +158,6 @@ void AltSoftSerial::end(void)
 	flushInput();
 	flushOutput();
 	DISABLE_INT_COMPARE_A();
-	// TODO: restore timer to original settings?
 }
 
 
@@ -128,84 +165,114 @@ void AltSoftSerial::end(void)
 /**           Transmission             **/
 /****************************************/
 
-void AltSoftSerial::writeByte(uint8_t b)
+/** Prepare the data for sending:
+ * extend to 16 bits
+ * shift to position and add start and stop bits
+ * add parity if necessary
+ * @return the data converted to signal bits that are just shifted out to transmit.
+ */
+static inline uint16_t prepareSend(data_type data)
+{
+	uint16_t t=((uint16_t) data)<<1;	// Lowest bit is the start bit
+	if(ass_parity)
+	{
+		data_type c=data;
+		uint8_t p=0;
+		for(uint8_t i=0;i<ass_nBit;++i)
+		{
+			p^=c&1;
+			c>>=1;
+		}
+		if(p)
+		{
+			t |= ass_mask_odd;
+		}
+		else
+		{
+			t |= ass_mask_even;
+		}
+	}else
+	{
+		t |= ass_mask_odd; // Odd and even masks are equal in this case
+	}
+	return t;
+}
+/**
+ * Set the output compare hardware to output the next signal bit (start, stop, parity or data)
+ * at the requested time.
+ */
+static inline void setupSendBit(counter_type signalTime)
+{
+	uint8_t bit = tx_byte & 1;
+	tx_byte >>= 1;	// Shift for next bit
+	// First set the output compare register
+	// and only then set the operation: this makes sure that a previous stale register value will not trigger an accidental signal early
+	SET_COMPARE_A(signalTime);
+	if (bit) {
+		CONFIG_MATCH_SET();
+		PORTB|=0b00000010;
+	} else {
+		CONFIG_MATCH_CLEAR();
+		PORTB&=~0b00000010;
+	}
+}
+
+
+void AltSoftSerial::writeByte(data_type b)
 {
 	uint8_t intr_state, head;
 
 	head = tx_buffer_head + 1;
 	if (head >= TX_BUFFER_SIZE) head = 0;
 	while (tx_buffer_tail == head) ; // wait until space in buffer
-	intr_state = SREG;
-	cli();
-	if (tx_state) {
-		tx_buffer[head] = b;
-		tx_buffer_head = head;
-	} else {
-		tx_state = 1;
-		tx_byte = b;
-		tx_bit = 0;
-		ENABLE_INT_COMPARE_A();
-		CONFIG_MATCH_CLEAR();
-		SET_COMPARE_A(GET_TIMER_COUNT() + 16);
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+	{
+		if (tx_state) {
+			tx_buffer[head] = b;
+			tx_buffer_head = head;
+		} else {
+			tx_state = ass_nSignal+1;
+			tx_byte = prepareSend(b);
+			setupSendBit(GET_TIMER_COUNT() + ASS_TICK_LITTLE_TIME);
+			ENABLE_INT_COMPARE_A();
+		}
 	}
-	SREG = intr_state;
 }
 
-
-ISR(COMPARE_A_INTERRUPT)
+ISR_COMPARE_A_INTERRUPT()
 {
-	uint8_t state, byte, bit, head, tail;
-	uint16_t target;
-
-	state = tx_state;
-	byte = tx_byte;
-	target = GET_COMPARE_A();
-	while (state < 10) {
-		target += ticks_per_bit;
-		if (state < 9)
-			bit = byte & 1;
-		else
-			bit = 1; // stopbit
-		byte >>= 1;
-		state++;
-		if (bit != tx_bit) {
-			if (bit) {
-				CONFIG_MATCH_SET();
+	tx_state--; // Count transmit state
+	uint8_t state = tx_state;
+	if (state > 1) {
+		setupSendBit(GET_COMPARE_A() + ticks_per_bit);
+	}else
+	{
+		uint8_t head = tx_buffer_head;
+		uint8_t tail = tx_buffer_tail;
+		if (head == tail) {
+			if (state == 1) {
+				// Wait for final stop bit to finish
+				SET_COMPARE_A(GET_COMPARE_A() + ticks_per_bit);
 			} else {
-				CONFIG_MATCH_CLEAR();
+				// Transmit fully finished - new transmit can be started at any moment from now.
+				CONFIG_MATCH_NORMAL();
+				DISABLE_INT_COMPARE_A();
 			}
-			SET_COMPARE_A(target);
-			tx_bit = bit;
-			tx_byte = byte;
-			tx_state = state;
-			// TODO: how to detect timing_error?
-			return;
-		}
-	}
-	head = tx_buffer_head;
-	tail = tx_buffer_tail;
-	if (head == tail) {
-		if (state == 10) {
-			// Wait for final stop bit to finish
-			tx_state = 11;
-			SET_COMPARE_A(target + ticks_per_bit);
 		} else {
-			tx_state = 0;
-			CONFIG_MATCH_NORMAL();
-			DISABLE_INT_COMPARE_A();
+			// Transmit of byte finished - start next byte
+			if (++tail >= TX_BUFFER_SIZE) tail = 0;
+			tx_buffer_tail = tail;
+			tx_byte = prepareSend(tx_buffer[tail]);
+			tx_state = ass_nSignal+1;
+			if (state == 1)
+			{
+				setupSendBit(GET_COMPARE_A() + ticks_per_bit);
+			}
+			else
+			{
+				setupSendBit(GET_TIMER_COUNT() + ASS_TICK_LITTLE_TIME);
+			}
 		}
-	} else {
-		if (++tail >= TX_BUFFER_SIZE) tail = 0;
-		tx_buffer_tail = tail;
-		tx_byte = tx_buffer[tail];
-		tx_bit = 0;
-		CONFIG_MATCH_CLEAR();
-		if (state == 10)
-			SET_COMPARE_A(target + ticks_per_bit);
-		else
-			SET_COMPARE_A(GET_TIMER_COUNT() + 16);
-		tx_state = 1;
-		// TODO: how to detect timing_error?
 	}
 }
 
@@ -219,83 +286,108 @@ void AltSoftSerial::flushOutput(void)
 /**            Reception               **/
 /****************************************/
 
-ISR(CAPTURE_INTERRUPT)
+static inline void setupCapture(uint8_t bit)
 {
-	uint8_t state, bit, head;
-	uint16_t capture, target;
-	uint16_t offset, offset_overflow;
-
-	capture = GET_INPUT_CAPTURE();
-	bit = rx_bit;
 	if (bit) {
 		CONFIG_CAPTURE_FALLING_EDGE();
 		rx_bit = 0;
 	} else {
 		CONFIG_CAPTURE_RISING_EDGE();
-		rx_bit = 0x80;
+		rx_bit = 1;
 	}
-	state = rx_state;
+}
+
+static inline void fillReceived(uint8_t currentBit, counter_type capture)
+{
+	uint8_t state=rx_state;
+	counter_type target=rx_target;
+	counter_type offset = capture - target;
+	counter_type offset_overflow = COUNTER_MAX_VALUE - ticks_per_bit;
+	// Edge happened after required sampling time but before overflow time
+
+	// Edge happening before required sample time is ignored - that is ok
+	// Overflow of counter can not happen because timeout would cancel receive before that happens
+	while (offset < offset_overflow && state<17)
+	{
+		// Save bit received
+		if(!currentBit)
+		{
+			rx_byte|=rx_mask;
+		}
+		rx_mask<<=1;
+		state++; // Count state of receive
+		target+=ticks_per_bit;
+		offset = capture - target;
+	}
+	rx_target=target;
+	rx_state=state;
+}
+
+
+ISR_CAPTURE_INTERRUPT()
+{
+	counter_type capture = GET_INPUT_CAPTURE();
+	uint8_t bit = rx_bit;
+	setupCapture(bit);
+	uint8_t state = rx_state;
 	if (state == 0) {
 		if (!bit) {
 			uint16_t end = capture + rx_stop_ticks;
 			SET_COMPARE_B(end);
 			ENABLE_INT_COMPARE_B();
-			rx_target = capture + ticks_per_bit + ticks_per_bit/2;
+			rx_target = capture + ticks_per_bit/2;
 			rx_state = 1;
 		}
 	} else {
-		target = rx_target;
-		offset_overflow = 65535 - ticks_per_bit;
-		while (1) {
-			offset = capture - target;
-			if (offset > offset_overflow) break;
-			rx_byte = (rx_byte >> 1) | rx_bit;
-			target += ticks_per_bit;
-			state++;
-			if (state >= 9) {
-				DISABLE_INT_COMPARE_B();
-				head = rx_buffer_head + 1;
-				if (head >= RX_BUFFER_SIZE) head = 0;
-				if (head != rx_buffer_tail) {
-					rx_buffer[head] = rx_byte;
-					rx_buffer_head = head;
-				}
-				CONFIG_CAPTURE_FALLING_EDGE();
-				rx_bit = 0;
-				rx_state = 0;
-				return;
-			}
-		}
-		rx_target = target;
-		rx_state = state;
+		fillReceived(bit, capture);
 	}
 	//if (GET_TIMER_COUNT() - capture > ticks_per_bit) AltSoftSerial::timing_error = true;
 }
 
-ISR(COMPARE_B_INTERRUPT)
+/** Decode a single data from the signal bits.
+ * also check for errors (parity, start bit, stop bits).
+ * @return decoded value or 32768 in case of error. (Testing for highest bit is enough because that is never 1 for a valid value).
+ */
+static inline uint16_t decodeData()
 {
-	uint8_t head, state, bit;
-
-	DISABLE_INT_COMPARE_B();
-	CONFIG_CAPTURE_FALLING_EDGE();
-	state = rx_state;
-	bit = rx_bit ^ 0x80;
-	while (state < 9) {
-		rx_byte = (rx_byte >> 1) | bit;
-		state++;
+	uint16_t r=rx_byte;
+	if(r & 1)
+	{
+		// Start bit is invalid
+		return 32768;
 	}
-	head = rx_buffer_head + 1;
-	if (head >= RX_BUFFER_SIZE) head = 0;
-	if (head != rx_buffer_tail) {
-		rx_buffer[head] = rx_byte;
-		rx_buffer_head = head;
-	}
-	rx_state = 0;
-	CONFIG_CAPTURE_FALLING_EDGE();
-	rx_bit = 0;
+	r>>=1;
+	// TODO check parity and stop bits
+	return ((data_type)r)&ass_receive_mask;
 }
 
 
+ISR_COMPARE_B_INTERRUPT()
+{
+	DISABLE_INT_COMPARE_B();
+	CONFIG_CAPTURE_FALLING_EDGE();
+	fillReceived(rx_bit, GET_COMPARE_B());
+	
+	uint16_t receivedData = decodeData();
+	if((receivedData & 32768) == 0)
+	{
+		uint8_t	head = rx_buffer_head + 1;
+		if (head >= RX_BUFFER_SIZE) head = 0;
+		if (head != rx_buffer_tail) {
+			rx_buffer[head] = (data_type)receivedData;
+			rx_buffer_head = head;
+		}
+	}else
+	{
+		// Error but be have no means to handle it for now
+	}
+
+	rx_state = 0;
+	CONFIG_CAPTURE_FALLING_EDGE();
+	rx_bit = 0;
+	rx_byte=0;
+	rx_mask=1;
+}
 
 int AltSoftSerial::read(void)
 {
@@ -345,16 +437,4 @@ void AltSoftSerial::flushInput(void)
 {
 	rx_buffer_head = rx_buffer_tail;
 }
-
-
-#ifdef ALTSS_USE_FTM0
-void ftm0_isr(void)
-{
-	uint32_t flags = FTM0_STATUS;
-	FTM0_STATUS = 0;
-	if (flags & (1<<0) && (FTM0_C0SC & 0x40)) altss_compare_b_interrupt();
-	if (flags & (1<<5)) altss_capture_interrupt();
-	if (flags & (1<<6) && (FTM0_C6SC & 0x40)) altss_compare_a_interrupt();
-}
-#endif
 

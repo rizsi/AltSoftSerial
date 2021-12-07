@@ -1,5 +1,14 @@
 # AltSoftSerial Library
 
+## Modifications by rizsi
+
+ * Instead of an Arduino library make it a standalone avr-gcc library
+ * Remove target specific code from implementation. This implements some kind of HAL layer. Use target specific configuration header instead of ifdefs.
+ * Implement parity and 2 stop bits.
+
+
+## Original
+
 Improved software emulated serial, using hardware timers for precise signal
 timing and availability of CPU time for other libraries to respond to interrupts
 during data AltSoftSerial data transmission and reception.

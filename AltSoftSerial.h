@@ -25,52 +25,53 @@
 #define AltSoftSerial_h
 
 #include <inttypes.h>
+// Configure compiler so that the platform specific include file is found.
+#include <AltSoftSerial_Config.h>
 
-#if ARDUINO >= 100
-#include "Arduino.h"
-#else
-#include "WProgram.h"
-#include "pins_arduino.h"
-#endif
-
-#if defined(__arm__) && defined(CORE_TEENSY)
-#define ALTSS_BASE_FREQ F_BUS
-#else
-#define ALTSS_BASE_FREQ F_CPU
-#endif
-
-class AltSoftSerial : public Stream
+class AltSoftSerial
 {
 public:
 	AltSoftSerial() { }
 	~AltSoftSerial() { end(); }
-	static void begin(uint32_t baud) { init((ALTSS_BASE_FREQ + baud / 2) / baud); }
+	/** Configure hardware and start receiver and transmitter. @param baud baud rate in signal/seconds */
+	void begin(uint32_t baud);
+	/**
+	 * Configure hardware and start receiver and transmitter.
+	 * @param baud baud baud rate in signal/seconds
+	 * @param nBit number of bits per sample (valid values: 1-14 but start, stop data and parity must fit 16 bits)
+	 * @param parity 0:no parity 1:odd parity 2:even parity
+	 * @param nStopBit number of stop bits (valid values: 1, 2) */
+	static void begin(uint32_t baud, uint8_t nBit,  uint8_t parity, uint8_t nStopBit);
+	/** Stop receiver and transmitter. Hardware is not reset to original state: pins remain configured for serial.
+	 * Timer remains counting but timer interrupts are disabled.
+	 */
 	static void end();
 	int peek();
 	int read();
 	int available();
 	int availableForWrite();
-#if ARDUINO >= 100
-	size_t write(uint8_t byte) { writeByte(byte); return 1; }
-	void flush() { flushOutput(); }
-#else
 	void write(uint8_t byte) { writeByte(byte); }
 	void flush() { flushInput(); }
-#endif
-	using Print::write;
 	static void flushInput();
+	/** Blocking wait until all output is sent from the output buffer. */
 	static void flushOutput();
-	// for drop-in compatibility with NewSoftSerial, rxPin & txPin ignored
-	AltSoftSerial(uint8_t rxPin, uint8_t txPin, bool inverse = false) { (void)rxPin; (void)txPin; (void)inverse; }
-	bool listen() { return false; }
-	bool isListening() { return true; }
 	bool overflow() { bool r = timing_error; timing_error = false; return r; }
 	static int library_version() { return 1; }
 	static void enable_timer0(bool enable) { (void)enable; }
 	static bool timing_error;
 private:
-	static void init(uint32_t cycles_per_bit);
-	static void writeByte(uint8_t byte);
+	/**
+	 * Configure hardware and start receiver and transmitter.
+	 * @param cycles_per_bit number of CPU cycles (or the time base for the timer used) per a single bit time
+	 * @param nBit number of bits per sample (valid values: 1-14 but start, stop data and parity must fit 16 bits)
+	 * @param parity 0:no parity 1:odd parity 2:even parity
+	 * @param nStopBit number of stop bits (valid values: 1, 2) */
+	static void init(uint32_t cycles_per_bit, uint8_t nBit,  uint8_t parity, uint8_t nStopBit);
+	/**
+	 * Send a single data.
+	 * @param byte if data_type is not uint8_t then it may be more than 8 bit
+	 */
+	static void writeByte(data_type byte);
 };
 
 #endif

@@ -150,6 +150,10 @@ void AltSoftSerial::init(uint32_t cycles_per_bit, uint8_t nBit,  uint8_t parity,
 	tx_buffer_tail = 0;
 	ENABLE_INT_INPUT_CAPTURE();
 }
+bool AltSoftSerial::isTxOn()
+{
+	return true;	// TODO
+}
 
 void AltSoftSerial::end(void)
 {
@@ -279,6 +283,11 @@ ISR_COMPARE_A_INTERRUPT()
 void AltSoftSerial::flushOutput(void)
 {
 	while (tx_state) /* wait */ ;
+}
+
+void AltSoftSerial::flushWrite(void)
+{
+	flushOutput();
 }
 
 

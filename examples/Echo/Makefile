@@ -7,11 +7,11 @@ BINARYNAME = altsoftserial_echo
 MHZ = 16mhz
 F_CPU = 16000000
 
-SRCS = echo.cpp ../../AltSoftSerial.cpp ../../config/atmega328p/debug_uart0.cpp
+SRCS = echo.cpp ../../AltSoftSerial.cpp ../../config/atmega328p/AltSoftSerial_Config.cpp ../../config/atmega328p/debug_uart0.cpp
 
 HEADERS = ../../AltSoftSerial.h ../../config/atmega328p/AltSoftSerial_Config.h
 
-INCLUDE = -I ../../config/atmega328p/ -I ../../
+INCLUDE = -I ../../config/atmega328p/ -I ../../config/atmega328p/pins1/ -I ../../
 
 all: ${BINARYNAME}.hex
 

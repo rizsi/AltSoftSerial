@@ -41,23 +41,25 @@ public:
 	 * @param nBit number of bits per sample (valid values: 1-14 but start, stop data and parity must fit 16 bits)
 	 * @param parity 0:no parity 1:odd parity 2:even parity
 	 * @param nStopBit number of stop bits (valid values: 1, 2) */
-	static void begin(uint32_t baud, uint8_t nBit,  uint8_t parity, uint8_t nStopBit);
+	void begin(uint32_t baud, uint8_t nBit,  uint8_t parity, uint8_t nStopBit);
 	/** Stop receiver and transmitter. Hardware is not reset to original state: pins remain configured for serial.
 	 * Timer remains counting but timer interrupts are disabled.
 	 */
-	static void end();
+	void end();
 	int peek();
 	int read();
 	int available();
 	int availableForWrite();
 	void write(uint8_t byte) { writeByte(byte); }
-	void flush() { flushInput(); }
-	static void flushInput();
+//	void flush() { flushInput(); }
+	void flushInput();
 	/** Blocking wait until all output is sent from the output buffer. */
-	static void flushOutput();
+	void flushOutput();
+	/** Same as flushOutput. */
+	void flushWrite();
+	/** Is the transmit logic running? */
+	bool isTxOn();
 	bool overflow() { bool r = timing_error; timing_error = false; return r; }
-	static int library_version() { return 1; }
-	static void enable_timer0(bool enable) { (void)enable; }
 	static bool timing_error;
 private:
 	/**

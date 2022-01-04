@@ -7,23 +7,21 @@
 
 
 /** Set timeout absolute value when receiver timer must be executed */
-#define SET_COMPARE_B(val)		(OCR1B = (val))
+#define SET_TIMEOUT(val)		(OCR1B = (val))
 /** Get timeout absolute value when receiver timer must be (was) executed */
-#define GET_COMPARE_B()		(OCR1B)
+#define GET_TIMEOUT()		(OCR1B)
 /** Enable receiver timer interrupt */
-#define ENABLE_INT_COMPARE_B()	(TIFR1 = (1<<OCF1B), TIMSK1 |= (1<<OCIE1B))
+#define ENABLE_INT_TIMEOUT()	(TIFR1 = (1<<OCF1B), TIMSK1 |= (1<<OCIE1B))
 /** Disable Timer used for receiver. */
-#define DISABLE_INT_COMPARE_B()	(TIMSK1 &= ~(1<<OCIE1B))
+#define DISABLE_INT_TIMEOUT()	(TIMSK1 &= ~(1<<OCIE1B))
 
-#define COMPARE_A_INTERRUPT		TIMER1_COMPA_vect
-#define COMPARE_B_INTERRUPT		TIMER1_COMPB_vect
 /** Header of ISR function executed after bit signal is put to output by ouput compare hardware */
-#define ISR_COMPARE_A_INTERRUPT() ISR(COMPARE_A_INTERRUPT)
+#define ISR_OUTPUT_INTERRUPT() ISR(TIMER1_COMPA_vect)
 /** Interrupt routine that is executed when receiver timer was elapsed. */
-#define ISR_COMPARE_B_INTERRUPT() ISR(COMPARE_B_INTERRUPT)
+#define ISR_TIMEOUT_INTERRUPT() ISR(TIMER1_COMPB_vect)
 
 /** Enable timer interrupt on match on timer used for bits output */
-#define ENABLE_INT_COMPARE_A()	(TIFR1 = (1<<OCF1A), TIMSK1 |= (1<<OCIE1A))
+#define ENABLE_INT_OUTPUT()	(TIFR1 = (1<<OCF1A), TIMSK1 |= (1<<OCIE1A))
 /** On output compare match the output is set to low */
 #define CONFIG_MATCH_CLEAR()		(TCCR1A = (TCCR1A | (1<<COM1A1)) & ~(1<<COM1A0))
 /** On output compare match the output is set to high */
@@ -31,10 +29,10 @@
 /** On output compare match do nothing */
 #define CONFIG_MATCH_NORMAL()		(TCCR1A = TCCR1A & ~((1<<COM1A1) | (1<<COM1A0)))
 /** Disable interrupt on output compare match */
-#define DISABLE_INT_COMPARE_A()	(TIMSK1 &= ~(1<<OCIE1A))
+#define DISABLE_INT_OUTPUT()	(TIMSK1 &= ~(1<<OCIE1A))
 
 /** Set the output compare value to the desired value */
-#define SET_COMPARE_A(val)		(OCR1A = (val))
+#define SET_OUTPUT(val)		(OCR1A = (val))
 
 /** Read the currently set compare match value */
-#define GET_COMPARE_A()		(OCR1A)
+#define GET_OUTPUT()		(OCR1A)

@@ -28,6 +28,10 @@
 // Configure compiler so that the platform specific include file is found.
 #include <AltSoftSerial_Config.h>
 
+#define ERROR_PARITY 1
+#define ERROR_STOP 2
+#define ERROR_START 3
+
 class AltSoftSerial
 {
 public:
@@ -42,6 +46,7 @@ public:
 	 * @param parity 0:no parity 1:odd parity 2:even parity
 	 * @param nStopBit number of stop bits (valid values: 1, 2) */
 	void begin(uint32_t baud, uint8_t nBit,  uint8_t parity, uint8_t nStopBit);
+	void enableRead(uint8_t enable);
 	/** Stop receiver and transmitter. Hardware is not reset to original state: pins remain configured for serial.
 	 * Timer remains counting but timer interrupts are disabled.
 	 */
@@ -57,9 +62,15 @@ public:
 	void flushOutput();
 	/** Same as flushOutput. */
 	void flushWrite();
+	/** Delete unsent data from output buffer */
+	void clearWrite();
 	/** Is the transmit logic running? */
 	bool isTxOn();
 	bool overflow() { bool r = timing_error; timing_error = false; return r; }
+	/** Get the last error code. 0 means no error. Reading it clears the stored error. */
+	uint8_t getErrorCode();
+	/** Get the last error data. Valid value is stored in case there was an error. Example: parity error stores bits of raw received data. */
+	uint16_t getErrorData();
 	static bool timing_error;
 private:
 	/**

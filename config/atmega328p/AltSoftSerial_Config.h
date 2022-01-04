@@ -44,7 +44,7 @@ typedef uint8_t data_type;
 
 
 /** Enable input capture and its interrupt */
-#define ENABLE_INT_INPUT_CAPTURE()	(TIFR1 = (1<<ICF1), TIMSK1 = (1<<ICIE1))
+#define ENABLE_INT_INPUT_CAPTURE()	(TIFR1 = (1<<ICF1), TIMSK1 |= (1<<ICIE1))
 /** Disable input capture and its interrupt */
 #define DISABLE_INT_INPUT_CAPTURE()	(TIMSK1 &= ~(1<<ICIE1), TIFR1 = (1<<ICF1))
 /** Get the timestamp of the interrupt capture */
@@ -95,6 +95,10 @@ extern uint8_t ASS_TICK_LITTLE_TIME;
  * Milliseconds since TIMER1 has bees started.
  */
 uint32_t timer1_millis();
+/**
+ * Microseconds since TIMER1 has bees started.
+ */
+uint32_t timer1_micros();
 
 
 #endif // ALT_SOFT_SERIAL_CONFIG_ATMEGA328P_H

@@ -1,10 +1,10 @@
 #include <AltSoftSerial_Config.h>
 
 
-uint8_t ASS_TICK_LITTLE_TIME;
-uint32_t nOverflow=0;
-uint32_t timeMultiplier;
-uint32_t timeMultiplierMicros;
+static uint8_t ASS_TICK_LITTLE_TIME;
+static uint32_t nOverflow=0;
+static uint32_t timeMultiplier;
+static uint32_t timeMultiplierMicros;
 
 #define TIME_MULTIPLIER ((256ll*256ll*1000ll*65536ll)/(F_CPU))
 #define TIME_MULTIPLIER_MICROS ((1000ll*256ll*1000ll*65536ll)/(F_CPU))
